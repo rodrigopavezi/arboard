@@ -1,0 +1,11 @@
+node_modules/
+.DS_Store
+
+# Channel keys and config written by arboard / setup-channel.sh — never commit these
+wallet.json
+nostr-key.json
+arns-owner.json
+channel.json
+
+# Local Claude Code settings
+.claude/settings.local.json

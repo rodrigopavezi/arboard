@@ -1,0 +1,22 @@
+{
+  "name": "arboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Message channel (text, photos, video, voice) stored on Arweave",
+  "type": "module",
+  "bin": {
+    "arboard": "./arboard.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@ardrive/turbo-sdk": "^2.1.2",
+    "@solana/web3.js": "1.99.0",
+    "bs58": "5.0.0",
+    "ethers": "^6.17.0",
+    "nostr-tools": "^2.25.2",
+    "tweetnacl": "1.0.3",
+    "ws": "^8.22.0"
+  }
+}
