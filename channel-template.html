@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Canal</title>
+<style>
+  :root {
+    --bg: #f6f4ef; --card: #ffffff; --ink: #1d1c1a; --muted: #77736b;
+    --line: #e4e0d6; --accent: #2f6f5e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151514; --card: #1f1e1c; --ink: #ecebe6; --muted: #9a968d;
+            --line: #2e2c29; --accent: #7cc4ad; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 17px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 680px; margin: 0 auto; padding: 40px 16px 80px; }
+  header { margin-bottom: 28px; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .desc { color: var(--muted); margin: 0; white-space: pre-wrap; }
+  .msg { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+         padding: 18px 20px; margin-bottom: 16px; }
+  .date { color: var(--muted); font-size: 0.85rem; margin-bottom: 8px; }
+  .date a { color: inherit; text-decoration: none; }
+  .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .text a { color: var(--accent); }
+  .media { display: grid; gap: 10px; margin-top: 12px; }
+  .media img, .media video { width: 100%; height: auto; border-radius: 10px;
+                             background: var(--line); display: block; }
+  .media audio { width: 100%; }
+  .empty, .error { color: var(--muted); text-align: center; padding: 40px 0; }
+  footer { color: var(--muted); font-size: 0.8rem; text-align: center; margin-top: 40px; }
+  .notify { margin-top: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+  .notify summary { cursor: pointer; padding: 12px 16px; font-weight: 600; list-style: none; }
+  .notify summary::-webkit-details-marker { display: none; }
+  .notify summary::after { content: "▾"; float: right; color: var(--muted); }
+  .notify[open] summary::after { content: "▴"; }
+  .notify .body { padding: 0 16px 14px; display: grid; gap: 14px; }
+  .notify .row { display: grid; gap: 6px; }
+  .notify .row h3 { margin: 0; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .notify .row p { margin: 0; font-size: 0.95rem; }
+  .notify .btn { display: inline-block; background: var(--accent); color: var(--bg); text-decoration: none;
+                 padding: 8px 14px; border-radius: 999px; font-weight: 600; font-size: 0.95rem; justify-self: start; }
+  .notify a:not(.btn) { color: var(--accent); }
+  .notify code { font: 0.9rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--line);
+                 padding: 2px 6px; border-radius: 4px; overflow-wrap: anywhere; }
+  .notify button.copy { border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 6px;
+                        padding: 2px 8px; font-size: 0.8rem; cursor: pointer; margin-left: 6px; }
+  .notify .note { color: var(--muted); font-size: 0.8rem; }
+  .mirrors { color: var(--muted); font-size: 0.8rem; text-align: center; margin: 8px 0 0; overflow-wrap: anywhere; }
+  .mirrors a { color: var(--accent); }
+  :target { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title">…</h1>
+    <p class="desc" id="desc"></p>
+    <div id="notify-slot"></div>
+  </header>
+  <section id="feed"><p class="empty">Carregando…</p></section>
+  <footer id="foot">Publicado no Arweave</footer>
+</main>
+<script type="application/json" id="config">__ARBOARD_CONFIG__</script>
+<script>
+(async () => {
+  const C = JSON.parse(document.getElementById('config').textContent);
+  const feed = document.getElementById('feed');
+  const el = (tag, props = {}) => Object.assign(document.createElement(tag), props);
+  const ID = /^[A-Za-z0-9_-]{43}$/;
+  // Gateways list Ethereum-signed items under the wallet's 0x address; older data may use the id form.
+  const OWNERS = (Array.isArray(C.owners) && C.owners.length ? C.owners : [C.owner]).filter(Boolean);
+  const timeout = (ms) => (AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined);
+
+  // Where was this page opened? Gateways serve items from a per-item sandbox
+  // subdomain (<base32 of id>.gateway.tld) or from a path (gateway.tld/<id>).
+  let pageId = null;
+  let arnsName = null;   // set when opened by name, or learned from the channel profile
+  const here = (() => {
+    const m = location.hostname.match(/^([a-z2-7]{52})\.(.+)$/);
+    if (m) {
+      pageId = b32ToId(m[1]);
+      return `${location.protocol}//${m[2]}${location.port ? ':' + location.port : ''}`;
+    }
+    const p = location.pathname.match(/^\/([A-Za-z0-9_-]{43})/);
+    if (p) { pageId = p[1]; return location.origin; }
+    // Opened by ArNS name (<name>.gateway.tld): the gateway is the parent domain.
+    const n = location.hostname.match(/^([a-z0-9-]{1,51})\.(.+\..+|localhost)$/);
+    if (n) { arnsName = n[1]; return `${location.protocol}//${n[2]}${location.port ? ':' + location.port : ''}`; }
+    return C.gateway;
+  })();
+
+  function b32ToId(s) {
+    const A = 'abcdefghijklmnopqrstuvwxyz234567';
+    let bits = 0, val = 0; const out = [];
+    for (const ch of s) {
+      val = (val << 5) | A.indexOf(ch); bits += 5;
+      if (bits >= 8) { out.push((val >>> (bits - 8)) & 255); bits -= 8; }
+    }
+    const b64 = btoa(String.fromCharCode(...out.slice(0, 32)));
+    return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  // Gateways to try, in order: this one, the ones baked in at creation, the
+  // channel's original gateway, and peers this gateway knows about.
+  const strip = (u) => String(u).replace(/\/+$/, '');
+  // The channel's own gateway comes second: some gateways resolve names but
+  // have not indexed the channel for search, and C.gateway always has.
+  let gateways = [...new Set([here, C.gateway, ...(C.fallbacks || [])].map(strip))];
+  async function addPeers(from) {
+    try {
+      const r = await fetch(`${from}/ar-io/peers`, { signal: timeout(4000) });
+      const j = await r.json();
+      const peers = Object.values(j.gateways || {})
+        .filter(g => g && typeof g.url === 'string' && /^https?:\/\//.test(g.url))
+        .sort((a, b) => (b.dataWeight || 0) - (a.dataWeight || 0)).slice(0, 12).map(g => strip(g.url));
+      gateways = [...new Set([...gateways, ...peers])];
+    } catch {}
+  }
+  const peersReady = addPeers(here);
+
+  document.title = C.title || 'Canal';
+  document.getElementById('title').textContent = C.title || 'Canal';
+  document.getElementById('desc').textContent = C.description || '';
+  const foot = document.getElementById('foot');
+  if (C.network === 'testnet') foot.textContent = 'Publicado na testnet do Arweave (temporário)';
+
+  function renderText(text) {
+    const frag = document.createDocumentFragment();
+    const re = /(https?:\/\/[^\s<]+)/g;
+    let last = 0, m;
+    while ((m = re.exec(text))) {
+      frag.append(text.slice(last, m.index));
+      frag.append(el('a', { href: m[0], textContent: m[0], rel: 'noopener', target: '_blank' }));
+      last = m.index + m[0].length;
+    }
+    frag.append(text.slice(last));
+    return frag;
+  }
+
+  // Every item of this channel, signed by the channel owner only.
+  async function fetchItems(gw) {
+    const query = `query($owners:[String!],$channel:String!,$after:String){
+      transactions(first:100, after:$after, owners:$owners,
+        tags:[{name:"App-Name",values:["${C.app}"]},{name:"Channel",values:[$channel]}]){
+        pageInfo{hasNextPage}
+        edges{cursor node{id owner{address} tags{name value}}}}}`;
+    const items = [];
+    let after = null;
+    for (let page = 0; page < 20; page++) {
+      const r = await fetch(`${gw}/graphql`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, signal: timeout(20000),
+        body: JSON.stringify({ query, variables: { owners: OWNERS, channel: C.channel, after } }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const t = (await r.json())?.data?.transactions;
+      if (!t) throw new Error('resposta inesperada');
+      for (const e of t.edges) {
+        const n = e.node;
+        if (!OWNERS.includes(n.owner?.address) || !ID.test(n.id)) continue; // trust only the owner
+        const tags = Object.fromEntries(n.tags.map(x => [x.name, x.value]));
+        items.push({ id: n.id, tags, time: Number(tags['Unix-Time']) || 0 });
+      }
+      if (!t.pageInfo?.hasNextPage || !t.edges.length) break;
+      after = t.edges[t.edges.length - 1].cursor;
+    }
+    return items;
+  }
+
+  // Try gateways in order until one answers the search; that one serves data too.
+  // A gateway that answers with nothing has not indexed this channel (the page
+  // itself is always an item), so keep looking; keep the empty answer as a last resort.
+  let dataGw = here, items = null, empty = null;
+  for (let i = 0; i < gateways.length && i < 10 && !items; i++) {
+    if (i === 2) await peersReady;
+    try {
+      const got = await fetchItems(gateways[i]);
+      if (got.length) { items = got; dataGw = gateways[i]; }
+      else if (!empty) empty = gateways[i];
+    } catch {}
+  }
+  if (!items && empty) { items = []; dataGw = empty; }
+  if (!items) {
+    feed.replaceChildren(el('p', { className: 'error',
+      textContent: 'Não foi possível carregar as mensagens agora. Tente de novo mais tarde ou abra o canal por outro gateway.' }));
+    return showMirrors();
+  }
+  const order = () => [dataGw, ...gateways.filter(g => g !== dataGw)];
+
+  async function getJSON(id) {
+    for (const g of order().slice(0, 5)) {
+      for (const url of [`${g}/raw/${id}`, `${g}/${id}`]) {
+        try { const r = await fetch(url, { signal: timeout(20000) }); if (r.ok) return await r.json(); } catch {}
+      }
+    }
+    return null;
+  }
+
+  // Media: if a gateway fails to deliver a file, move to the next one.
+  function mediaEl(tag, id, props) {
+    const node = el(tag, props);
+    const list = order().slice(0, 5);
+    let i = 0;
+    node.src = `${list[0]}/${id}`;
+    node.addEventListener('error', () => { if (++i < list.length) node.src = `${list[i]}/${id}`; });
+    return node;
+  }
+
+  const removed = new Set(items.filter(i => i.tags.Type === 'delete' && ID.test(i.tags.Target || '')).map(i => i.tags.Target));
+  const profile = items.filter(i => i.tags.Type === 'profile').sort((a, b) => b.time - a.time)[0];
+  if (profile) {
+    const p = await getJSON(profile.id);
+    if (p && typeof p.title === 'string') {
+      document.title = p.title;
+      document.getElementById('title').textContent = p.title;
+      document.getElementById('desc').textContent = typeof p.description === 'string' ? p.description : '';
+      renderNostr(p.nostr, p.title);
+      if (typeof p.arns === 'string' && /^[a-z0-9-]{1,51}$/.test(p.arns)) arnsName = p.arns;
+    }
+  }
+
+  // "Follow on Nostr" box: the channel's Nostr profile, signed with its own key.
+  function renderNostr(n, title) {
+    if (!n || typeof n !== 'object') return;
+    const npub = String(n.npub || '');
+    if (!/^npub1[02-9ac-hj-np-z]{58}$/.test(npub)) return;
+    const ua = navigator.userAgent;
+    const os = /Android/i.test(ua) ? 'android' : /iPhone|iPad|iPod/i.test(ua) ? 'ios' : 'desktop';
+
+    const box = el('details', { className: 'notify' });
+    if (os !== 'desktop') box.open = true;
+    box.append(el('summary', { textContent: 'Siga no Nostr e receba avisos de novos posts' }));
+    const body = el('div', { className: 'body' });
+    const row = (h, ...kids) => { const r = el('div', { className: 'row' }); r.append(el('h3', { textContent: h }), ...kids); return r; };
+    const p = (...kids) => { const x = el('p'); x.append(...kids); return x; };
+    const link = (href, text, cls) => el('a', { href, textContent: text, className: cls || '', rel: 'noopener', target: href.startsWith('nostr:') ? '' : '_blank' });
+    const copyable = (text) => {
+      const frag = document.createDocumentFragment();
+      frag.append(el('code', { textContent: text }));
+      const b = el('button', { className: 'copy', type: 'button', textContent: 'Copiar' });
+      b.onclick = async () => {
+        try { await navigator.clipboard.writeText(text); b.textContent = 'Copiado'; }
+        catch { b.textContent = 'Selecione e copie'; }
+        setTimeout(() => (b.textContent = 'Copiar'), 1500);
+      };
+      frag.append(b);
+      return frag;
+    };
+
+    body.append(p('Cada post deste canal também é publicado no Nostr, uma rede descentralizada. ',
+      'Seguindo o canal num app Nostr, você lê os posts por lá e pode receber um aviso a cada post novo.'));
+    body.append(row('Já tem um app Nostr?', link(`nostr:${npub}`, 'Abrir o canal no app', 'btn')));
+    const apps = {
+      android: row('Android', p('Instale o ', link('https://amethyst.social', 'Amethyst'), ' ou o ',
+        link('https://primal.net', 'Primal'), ', e depois toque em "Abrir o canal no app".')),
+      ios: row('iPhone', p('Instale o ', link('https://nostur.com', 'Nostur'), ' (no perfil do canal, ative ',
+        'as notificações de novos posts) ou o ', link('https://damus.io', 'Damus'), '.')),
+      desktop: row('Computador', p('Veja no navegador: ', link(`https://njump.me/${npub}`, 'njump.me'), ' · ',
+        link(`https://primal.net/p/${npub}`, 'primal.net'), '.')),
+    };
+    const order = { android: ['android', 'ios', 'desktop'], ios: ['ios', 'android', 'desktop'], desktop: ['desktop', 'android', 'ios'] }[os];
+    order.forEach((k) => body.append(apps[k]));
+    body.append(row('Endereço oficial do canal', p(copyable(npub))));
+    body.append(el('p', { className: 'note',
+      textContent: 'Qualquer um pode criar um perfil com o mesmo nome. Siga apenas o endereço acima: só ele tem a assinatura deste canal.' }));
+    box.append(body);
+    document.getElementById('notify-slot').replaceChildren(box);
+  }
+
+  const posts = items.filter(i => i.tags.Type === 'post' && !removed.has(i.id)).sort((a, b) => b.time - a.time);
+  if (!posts.length) {
+    feed.replaceChildren(el('p', { className: 'empty', textContent: 'Nenhuma mensagem ainda.' }));
+    return showMirrors();
+  }
+
+  const fmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const bodies = await Promise.all(posts.map(p => getJSON(p.id)));
+  const cards = [];
+  posts.forEach((p, i) => {
+    const b = bodies[i];
+    if (!b || typeof b !== 'object') return;
+    const card = el('article', { className: 'msg', id: p.id });
+    const date = el('div', { className: 'date' });
+    const when = new Date(b.created || p.time * 1000);
+    date.append(el('a', { href: '#' + p.id, textContent: isNaN(when) ? '' : fmt.format(when) }));
+    card.append(date);
+    if (typeof b.text === 'string' && b.text) {
+      const t = el('div', { className: 'text' });
+      t.append(renderText(b.text));
+      card.append(t);
+    }
+    const media = el('div', { className: 'media' });
+    const ids = (arr) => (Array.isArray(arr) ? arr : []).map(m => m && m.id).filter(id => ID.test(id || ''));
+    ids(b.images).forEach(id => media.append(mediaEl('img', id, { loading: 'lazy', alt: '' })));
+    ids(b.videos).forEach(id => media.append(mediaEl('video', id, { controls: true, preload: 'metadata', playsInline: true })));
+    ids(b.audios).forEach(id => media.append(mediaEl('audio', id, { controls: true, preload: 'none' })));
+    if (media.children.length) card.append(media);
+    cards.push(card);
+  });
+  feed.replaceChildren(...cards);
+  if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
+  showMirrors();
+
+  // Tell visitors where else this same channel opens, in case this address gets blocked.
+  // With a name, mirrors are <name>.<other gateway>; otherwise <other gateway>/<page id>.
+  async function showMirrors() {
+    if (!pageId && !arnsName) return;
+    await peersReady;
+    // A name needs a gateway reached by domain name (not an IP address).
+    const byIp = (g) => /^\[|^\d+\.\d+\.\d+\.\d+$/.test(new URL(g).hostname);
+    const linkFor = (g) => {
+      if (!arnsName) return { href: `${g}/${pageId}`, text: g.replace(/^https?:\/\//, '') };
+      const u = new URL(g);
+      return { href: `${u.protocol}//${arnsName}.${u.host}/`, text: `${arnsName}.${u.host}` };
+    };
+    // Only list addresses that actually open the channel right now (some
+    // gateways serve data but don't resolve names, e.g. arweave.net).
+    const opens = async (href) => {
+      try { const r = await fetch(href, { signal: timeout(8000) }); return r.ok; } catch { return false; }
+    };
+    const cands = gateways.filter(g => g !== here && !(arnsName && byIp(g))).slice(0, 12).map(linkFor);
+    const ok = await Promise.all(cands.map(c => opens(c.href)));
+    const alts = cands.filter((_, i) => ok[i]).slice(0, 4);
+    if (!alts.length) return;
+    const box = el('p', { className: 'mirrors' });
+    box.append('Se este endereço for bloqueado, o mesmo canal abre em: ');
+    alts.forEach(({ href, text }, i) => {
+      if (i) box.append(' · ');
+      box.append(el('a', { href, textContent: text, rel: 'noopener' }));
+    });
+    foot.after(box);
+  }
+})();
+</script>
+</body>
+</html>
